@@ -1,0 +1,41 @@
+name: Build Windows EXE
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cai cong cu Tauri
+        run: npm install
+
+      - name: Build
+        run: npx tauri build
+
+      - name: Gom file
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item src-tauri/target/release/bundle/nsis/*.exe out/
+          $bin = Get-ChildItem src-tauri/target/release -Filter *.exe | Select-Object -First 1
+          Copy-Item $bin.FullName out/XepThoiKhoaBieu-portable.exe
+          Get-ChildItem out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XepThoiKhoaBieu-Windows
+          path: out/*.exe
