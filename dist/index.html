@@ -1720,7 +1720,7 @@ const VNEDU_ALIAS={'toan hoc':['Toán'],'ngoai ngu':['Tiếng Anh','Ngoại ng�
 function vneduRows(wb){for(const rows of Object.values(wb)){for(const r of Object.keys(rows).map(Number)){const row=rows[r]||[];
       const k1=row.findIndex(v=>/^cac lop day (hoc )?ky 1$/.test(noDau(v||'').replace(/\s+/g,' ')));if(k1<0)continue;
       const nm=row.findIndex(v=>/ho ten/.test(noDau(v||''))),mn=row.findIndex(v=>/^mon/.test(noDau(v||'').trim()));
-      const k2=row.findIndex(v=>/^cac lop day (hoc )?ky 2$/.test(noDau(v||'').replace(/\s+/g,' ')));if(nm<0||mn<0)continue;return{rows,hdr:r,nm,mn,k1,k2};}}return null;}
+      const k2=row.findIndex(v=>/^cac lop day (hoc )?ky 2$/.test(noDau(v||'').replace(/\s+/g,' ')));if(nm<0||mn<0)continue;return{rows,hdr:r,nm,mn,k1,k2,wb};}}return null;}
 function importVnEdu(info,replace,ky){const{rows,hdr,nm,mn,k1,k2}=info,warn=[],list=[],ki=ky===2&&k2>=0?k2:ky===1?k1:((S.term||0)===1&&k2>=0?k2:k1);
   /* môn VnEdu → các môn tương ứng trong phần mềm (môn ghép như KHTN, LS&ĐL, Nghệ thuật tách theo môn GV) */
   const cand=name=>{const al=VNEDU_ALIAS[noDau(name).trim().replace(/\s+/g,' ')]||[name];const out=[];
@@ -1742,6 +1742,14 @@ function importVnEdu(info,replace,ky){const{rows,hdr,nm,mn,k1,k2}=info,warn=[],l
       if(ts.length===1)m=ts[0];else if(o.length===1)m=o[0];else{const pool=ts.length?ts:cs;m=pool.find(x=>!taken.has(c+'|'+x))||pool[0];guess.push(cur+' – '+mv+' – '+c+' → '+m);}
       push(cur,m,c);}
     split.push(mv);}
+  /* sheet "Số tiết" (nếu có): ô lớp × môn ghi số tiết/tuần, ô trống hoặc 0 thì lấy theo trang Môn học */
+  let nOv=0;const ST=info.wb?sheetOf(info.wb,'Số tiết'):null;
+  if(ST){const rk=Object.keys(ST).map(Number).sort((a,b)=>a-b),hr=rk.find(r=>noDau((ST[r]||[])[0]||'').trim()==='lop');
+    if(hr!=null){const hd=ST[hr]||[],colM={};hd.forEach((h,j)=>{if(j<1||!h)return;const m=findByName(S.subjects,String(h).trim());if(m)colM[m.name]=j;});
+      const val=new Map();rk.filter(r=>r>hr).forEach(r=>{const row=ST[r]||[],c=findByName(S.classes,String(row[0]||'').trim());if(!c)return;
+        Object.entries(colM).forEach(([m,j])=>{const v=row[j];if(v!==undefined&&v!==''&&!isNaN(+v)&&+v>0)val.set(c.name+'|'+m,Math.round(+v));});});
+      list.forEach(R=>{const m=(findByName(S.subjects,R.m)||{}).name||R.m;R.cls.forEach(e=>{const c=(findByName(S.classes,e[0])||{}).name||e[0],v=val.get(c+'|'+m);
+        if(v==null)return;const d=defN(m,c);e[1]=v;if(v!==d)nOv++;});});}}
   if(!list.length){view.pccmMsg={ok:'File VnEdu không có dòng phân công nào ở cột "Các lớp dạy kỳ '+(ki===k2?2:1)+'".',warn:[]};return;}
   {const by=new Map();list.forEach(R=>R.cls.forEach(([c])=>{const k=c+'|'+R.m;by.set(k,(by.get(k)||[]).concat(R));}));let kept=0;
     by.forEach((Rs,k)=>{if(Rs.length<2)return;const[c,m]=k.split('|');const keep=S.assigns.find(a=>a.c===c&&a.m===m&&Rs.some(R=>(findByName(S.teachers,R.name)||{}).name===a.t));
@@ -1751,7 +1759,61 @@ function importVnEdu(info,replace,ky){const{rows,hdr,nm,mn,k1,k2}=info,warn=[],l
   const res=applyPccmRows(list,replace,warn);
   if(renamed.length)warn.unshift('Tên GV viết khác dấu, đã ghép với GV đang có: '+[...new Set(renamed)].join('; '));
   if(guess.length)warn.unshift('Môn ghép tự đoán (GV chưa khai môn ở trang Giáo viên), cần kiểm tra: '+guess.slice(0,15).join('; ')+(guess.length>15?'… ('+guess.length+' dòng)':''));
-  view.pccmMsg={ok:'Đọc file VnEdu (lớp dạy kỳ '+(ki===k2?2:1)+'): '+nGV+' GV. '+res.ok+([...new Set(split)].length?' · Môn ghép đã tách theo môn của GV: '+[...new Set(split)].join(', '):''),warn};}
+  view.pccmMsg={ok:'Đọc file VnEdu (lớp dạy kỳ '+(ki===k2?2:1)+'): '+nGV+' GV. '+res.ok+(ST?' · Sheet Số tiết: '+(nOv?nOv+' lớp – môn khác chương trình':'không có lớp nào khác chương trình'):'')+([...new Set(split)].length?' · Môn ghép đã tách theo môn của GV: '+[...new Set(split)].join(', '):''),warn};}
+/* ---------- Xuất PCCM theo dạng VnEdu (trống hoặc điền sẵn PCCM đang dùng), kèm sheet Môn học, Giáo viên, Lớp ---------- */
+const VNEDU_DISP={'toan hoc':'Toán học','ngoai ngu':'Ngoại ngữ','tieng dan toc':'Tiếng dân tộc','khoa hoc tu nhien':'Khoa học tự nhiên','lich su va dia li':'Lịch sử và Địa lí','nghe thuat':'Nghệ thuật',
+  'hoat dong trai nghiem, huong nghiep':'Hoạt động trải nghiệm, hướng nghiệp','noi dung giao duc cua dia phuong':'Nội dung giáo dục của địa phương','giao duc the chat':'Giáo dục thể chất','giao duc cong dan':'Giáo dục công dân','ngu van':'Ngữ văn','tin hoc':'Tin học','cong nghe':'Công nghệ'};
+function vneduNameOf(m){for(const[k,disp]of Object.entries(VNEDU_DISP)){const al=VNEDU_ALIAS[k]||[];if(al.some(a=>findByName(S.subjects,a)===m))return disp;}return m.name;}
+/* nhóm phân công đang dùng: [{t, rows:[{m, cls:[tên lớp], ov:{lớp:số tiết khác chương trình}}]}] theo thứ tự GV, môn */
+function pccmGroups(){const ci=new Map(S.classes.map((c,i)=>[c.name,i])),mi=new Map(S.subjects.map((m,i)=>[m.name,i])),term=S.term||0,out=[];
+  S.teachers.forEach(t=>{const as=S.assigns.filter(a=>a.t===t.name);if(!as.length)return;const by=new Map();
+    as.forEach(a=>{if(!by.has(a.m))by.set(a.m,{m:a.m,cls:[],ov:{}});const g=by.get(a.m);g.cls.push(a.c);const sm=S.subjects[mi.get(a.m)],gr=gradeOf(a.c),pn=sm&&sm.p&&sm.p[gr]?+sm.p[gr][term]:NaN;if(a.n!=null&&a.n!==''&&+a.n!==pn)g.ov[a.c]=+a.n;});
+    const rows=[...by.values()].sort((x,y)=>(mi.get(x.m)??999)-(mi.get(y.m)??999));rows.forEach(r=>r.cls.sort((a,b)=>(ci.get(a)??999)-(ci.get(b)??999)));out.push({t,rows});});
+  return out;}
+function vneduTemplate(fill){const C=XL.col,H=1,IN=2,TI=4,NO=5,INC=6,WR=7,LB=8,i=info(),term=S.term||0,gs=(S.grades||[6,7,8,9]).map(String);
+  const subs=S.subjects.filter(m=>!m.fixed),G=fill?pccmGroups():[];
+  /* Hướng dẫn */
+  const g={name:'Hướng dẫn',cells:{B2:{v:'MẪU PHÂN CÔNG CHUYÊN MÔN THEO DẠNG VNEDU',s:TI}},cols:[3,125]};
+  ['Sheet "PCCM" có đúng các cột như file xuất từ VnEdu: Mã số GV, Họ tên / Tài khoản, Môn, Các lớp dạy kỳ 1, Các lớp dạy kỳ 2.',
+   'Mỗi dòng 1 GV – 1 môn. GV dạy nhiều môn: ghi thêm dòng bên dưới, để trống Họ tên (giống VnEdu) hoặc ghi lại họ tên đều được.',
+   'Cột "Môn": chọn từ danh sách (đúng tên môn trong phần mềm, xem sheet "Môn học"). Tên môn kiểu VnEdu (Toán học, Khoa học tự nhiên…) phần mềm cũng tự đổi được.',
+   'Cột "Các lớp dạy": ghi tên lớp cách nhau dấu phẩy, vd: 6A1, 6A2, 7A3. Tên lớp xem sheet "Lớp".',
+   'Cột "Họ tên": chọn từ sheet "Giáo viên" (GV mới gõ thẳng tên vào, phần mềm tạo mới khi nhập).',
+   'Sheet "Số tiết": mỗi dòng 1 lớp, mỗi cột 1 môn, ghi số tiết/tuần của lớp đó. Đã điền sẵn theo chương trình'+(fill?' (và số tiết đang dùng)':'')+', chỉ cần sửa lớp nào dạy khác. Ô trống thì lấy theo trang Môn học.',
+   'Xong thì lưu file, vào phần mềm trang Phân công → "Danh sách, nhập Excel / VnEdu" → Cách 2: Nhập file VnEdu, chọn học kỳ cần lấy.',
+   '',(i.school||'')+(i.year?' – Năm học '+i.year:''),'Tạo từ phần mềm Xếp thời khóa biểu – Tác giả: Nguyễn Duy Tân, GV trường THCS Vĩnh Phước, TP Cần Thơ']
+    .forEach((t,k)=>{g.cells['B'+(4+k)]={v:t,s:k===6?LB:WR};});
+  /* Môn học */
+  const mh={name:'Môn học',cells:{A1:{v:'Tên môn trong phần mềm (dùng ở cột Môn)',s:H},B1:{v:'Tên tương ứng trên VnEdu',s:H}},cols:[30,38,...gs.map(()=>10)],freeze:'A2',heights:{1:32}};
+  gs.forEach((gr,j)=>mh.cells[C(2+j)+'1']={v:'Khối '+gr+' (tiết/tuần)',s:H});
+  subs.forEach((m,k)=>{const r=2+k;mh.cells['A'+r]={v:m.name,s:IN};mh.cells['B'+r]={v:vneduNameOf(m)};gs.forEach((gr,j)=>{const v=m.p&&m.p[gr]?m.p[gr][term]:'';mh.cells[C(2+j)+r]={v:v===''||v==null?'':+v,s:INC};});});
+  /* Giáo viên */
+  const gv={name:'Giáo viên',cells:{A1:{v:'Họ tên',s:H},B1:{v:'Môn dạy (theo phần mềm)',s:H},C1:{v:'Chủ nhiệm lớp',s:H}},cols:[30,40,14],freeze:'A2'};
+  S.teachers.forEach((t,k)=>{const r=2+k;gv.cells['A'+r]={v:t.name,s:IN};gv.cells['B'+r]={v:(t.subjects||[]).join(', ')};gv.cells['C'+r]={v:S.classes.filter(c=>c.gvcn===t.name).map(c=>c.name).join(', ')};});
+  /* Lớp */
+  const lp={name:'Lớp',cells:{A1:{v:'Lớp',s:H},B1:{v:'Điểm trường',s:H},C1:{v:'Buổi học',s:H},D1:{v:'GVCN',s:H}},cols:[10,24,12,30],freeze:'A2'};
+  S.classes.forEach((c,k)=>{const r=2+k;lp.cells['A'+r]={v:c.name,s:IN};lp.cells['B'+r]={v:c.site||''};lp.cells['C'+r]={v:{S:'Sáng',C:'Chiều',SC:'2 buổi'}[c.ses||'S']};lp.cells['D'+r]={v:c.gvcn||''};});
+  /* Số tiết: lớp × môn, điền sẵn chương trình (hoặc số tiết đang dùng) để sửa thủ công */
+  const cur=new Map();if(fill)S.assigns.forEach(a=>{if(a.n!=null&&a.n!=='')cur.set(a.c+'|'+a.m,+a.n);});
+  const st={name:'Số tiết',cells:{A1:{v:'SỐ TIẾT/TUẦN TỪNG LỚP – TỪNG MÔN',s:TI},A2:{v:'Đã điền sẵn theo chương trình'+(fill?' và số tiết đang dùng':'')+'. Lớp nào dạy khác thì sửa số ở ô đó. Ô trống hoặc 0: lấy theo trang Môn học. Tên môn ở dòng 4 giữ nguyên.',s:NO},
+      A4:{v:'Lớp',s:H},B4:{v:'Khối',s:H}},cols:[10,7,...subs.map(()=>11)],freeze:'C5',heights:{4:46}};
+  subs.forEach((m,j)=>st.cells[C(2+j)+'4']={v:m.name,s:H});
+  S.classes.forEach((c,k)=>{const r=5+k;st.cells['A'+r]={v:c.name,s:IN};st.cells['B'+r]={v:+gradeOf(c.name)||'',s:INC};
+    subs.forEach((m,j)=>{const v=cur.has(c.name+'|'+m.name)?cur.get(c.name+'|'+m.name):defN(m.name,c.name);st.cells[C(2+j)+r]={v:v?+v:'',s:INC};});});
+  /* PCCM (dạng VnEdu) */
+  const R0=6,nRows=Math.max(300,G.reduce((a,x)=>a+x.rows.length,0)+60),RE=R0+nRows-1;
+  const pc={name:'PCCM',tabSel:1,cells:{A1:{v:'DANH SÁCH PHÂN CÔNG CHUYÊN MÔN'+(i.school?' – '+i.school:''),s:TI},A2:{v:(i.year?'Năm học '+i.year+'. ':'')+(fill?'Phân công đang dùng trong phần mềm ('+(term?'học kỳ II':'học kỳ I')+'), ghi ở cả 2 cột kỳ 1 và kỳ 2 để sửa tiếp.':'Mẫu trống: điền mỗi dòng 1 GV – 1 môn.'),s:NO},
+      A3:{v:'Cột Môn chọn đúng tên trong sheet "Môn học"; lớp cách nhau dấu phẩy. Xem sheet "Hướng dẫn".',s:NO}},cols:[14,32,26,46,46],freeze:'A6',heights:{5:30}};
+  ['Mã số GV','Họ tên / Tài khoản','Môn','Các lớp dạy kỳ 1','Các lớp dạy kỳ 2'].forEach((h,j)=>pc.cells[C(j)+'5']={v:h,s:H});
+  let r=R0;
+  G.forEach(({t,rows},ti)=>rows.forEach((x,k)=>{const cl=x.cls.join(', ');
+    pc.cells['A'+r]={v:k?'':String(ti+1),s:INC};pc.cells['B'+r]={v:k?'':t.name,s:IN};pc.cells['C'+r]={v:x.m,s:IN};pc.cells['D'+r]={v:cl,s:IN};pc.cells['E'+r]={v:cl,s:IN};r++;}));
+  for(;r<=RE;r++)['A','B','C','D','E'].forEach(cl=>pc.cells[cl+r]={v:'',s:cl==='A'?INC:IN});
+  pc.dv=[{sqref:`B${R0}:B${RE}`,f:`'Giáo viên'!$A$2:$A$${Math.max(2,1+S.teachers.length+200)}`,warn:1},{sqref:`C${R0}:C${RE}`,f:`'Môn học'!$A$2:$A$${Math.max(2,1+subs.length+30)}`,warn:1}];
+  return buildXlsx([pc,st,mh,gv,lp,g]);}
+function downloadVnedu(fill){if(fill&&!S.assigns.length)return toast('Chưa có phân công để xuất');const b=vneduTemplate(fill),a=document.createElement('a');a.href=URL.createObjectURL(b);
+  a.download=(fill?'PCCM-dang-dung-VnEdu-':'PCCM-mau-VnEdu-')+(fname()||'truong')+'.xlsx';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+  toast(fill?'Đã xuất PCCM đang dùng theo dạng VnEdu':'Đã tải mẫu PCCM dạng VnEdu');}
 const normName=x=>noDau(x).replace(/\s+/g,' ');
 function sheetOf(wb,name){const k=Object.keys(wb).find(n=>normName(n)===normName(name));return k?wb[k]:null;}
 /* ---------- So khớp tên (bỏ khác biệt hoa/thường, khoảng trắng, vị trí dấu thanh: Hoá = Hóa, Thuý = Thúy) ---------- */
@@ -1910,8 +1972,8 @@ function exportMau(m,from,label){m=m||model();if(!TKB.stats(m).placed)return toa
 function verModel(v){return TKB.build(Object.assign({},S,{result:{pos:JSON.parse(JSON.stringify(v.pos))}}));}
 /* ---------- File PCCM mẫu tải từ phần mềm: danh mục lấy từ cài đặt hiện tại, PCCM để trống ---------- */
 const PC={R0:5,NR:200,NM:100,NL:200,NT:400,SPARE:10};
-function pccmTemplate(){const C=XL.col,cs=S.classes.slice(),subs=S.subjects.filter(m=>!m.fixed),gs=(S.grades||[6,7,8,9]).map(String),term=S.term||0;
-  const R0=PC.R0,RE=R0+PC.NR-1,ML=`'Môn học'!$A$5:$A$${4+PC.NM}`,LL=`'Lớp'!$A$5:$A$${4+PC.NL}`;
+function pccmTemplate(fill){const FG=fill?pccmGroups():[];const C=XL.col,cs=S.classes.slice(),subs=S.subjects.filter(m=>!m.fixed),gs=(S.grades||[6,7,8,9]).map(String),term=S.term||0;
+  const R0=PC.R0,RE=R0+Math.max(PC.NR,FG.reduce((a,x)=>a+x.rows.length,0)+30)-1,ML=`'Môn học'!$A$5:$A$${4+PC.NM}`,LL=`'Lớp'!$A$5:$A$${4+PC.NL}`;
   const KINDS=['Sáng chính – chiều phụ','Chiều chính – sáng phụ','7 tiết: sáng 4 – chiều 3','7 tiết: sáng 3 – chiều 4','Tự do cả 2 buổi'];
   const H=1,IN=2,CA=3,TI=4,NO=5,INC=6,WR=7,LB=8,GR=9;
   /* Hướng dẫn */
@@ -1953,6 +2015,10 @@ function pccmTemplate(){const C=XL.col,cs=S.classes.slice(),subs=S.subjects.filt
     const cnt=gs.map((gr,j)=>`COUNTIFS($${KL}$3:$${KR}$3,${gr},${KL}${r}:${KR}${r},"x")*IFERROR(INDEX('Môn học'!$${C(1+j)}$5:$${C(1+j)}$${4+PC.NM},MATCH($C${r},${ML},0)),0)`).join('+');
     pc.cells['G'+r]={f:`IF(OR(B${r}="",C${r}=""),"",SUMIF(${KL}${r}:${KR}${r},">0")+${cnt})`,s:CA};
     for(let j=0;j<NC;j++)pc.cells[C(K0+j)+r]={v:'',s:INC};}
+  if(fill){let r=R0;const cidx=new Map(cs.map((c,j)=>[c.name,j]));
+    FG.forEach(({t,rows})=>{const cn=S.classes.filter(c=>c.gvcn===t.name).map(c=>c.name)[0]||'';rows.forEach(x=>{pc.cells['B'+r].v=t.name;pc.cells['C'+r].v=x.m;pc.cells['D'+r].v=cn;pc.cells['E'+r].v=t.duty||'';pc.cells['F'+r].v=t.red?+t.red:'';
+      x.cls.forEach(c=>{const j=cidx.get(c);if(j!=null)pc.cells[C(K0+j)+r].v=x.ov[c]!=null?x.ov[c]:'x';});r++;});});
+    pc.cells.A2={v:'Phân công đang dùng trong phần mềm. Sửa xong lưu lại rồi nhập lại. x = dạy đủ số tiết chương trình; số = số tiết khác chương trình. Ô xám: lớp không học môn đó.',s:NO};}
   const r1=RE+2,r2=RE+3,r3=RE+4;
   pc.cells['E'+r1]={v:'Tổng tiết đã phân công',s:LB};pc.cells['E'+r2]={v:'Tiết theo chương trình',s:LB};pc.cells['E'+r3]={v:'Số môn bị 2 GV cùng đánh x',s:LB};
   for(let j=0;j<NC;j++){const cl=C(K0+j),gc=`INDEX(${gRange},0,MATCH(${cl}$3,${gHdr},0))`,lr=`MATCH(${cl}$4,${LL},0)`;
@@ -1964,7 +2030,7 @@ function pccmTemplate(){const C=XL.col,cs=S.classes.slice(),subs=S.subjects.filt
     {sqref:`${KL}${R0}:${KR}${RE}`,dxf:1,f:`${KL}${R0}<>""`},
     {sqref:`${KL}${r1}:${KR}${r1}`,dxf:2,f:`AND(${KL}$4<>"",${KL}${r2}<>"",${KL}${r1}<>${KL}${r2})`},{sqref:`${KL}${r3}:${KR}${r3}`,dxf:2,f:`AND(${KL}$4<>"",N(${KL}${r3})>0)`}];
   return buildXlsx([g,pc,lp,mh,dm]);}
-function downloadPccmTemplate(){const b=pccmTemplate(),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='PCCM-mau-'+(fname()||'truong')+'.xlsx';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+function downloadPccmTemplate(fill){if(fill&&!S.assigns.length)return toast('Chưa có phân công để xuất');const b=pccmTemplate(fill),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=(fill?'PCCM-dang-dung-':'PCCM-mau-')+(fname()||'truong')+'.xlsx';document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
   toast('Đã tải file PCCM mẫu. Điền xong, lưu lại rồi bấm "Nhập file Excel PCCM".');}
 /* Ghi phân công từ các dòng PCCM đã đọc: {name,m,gvc,duty,red,cls:[[tên lớp, số tiết hoặc null]]} */
 function applyPccmRows(list,replace,warn){const rows=[],added={t:[],c:[],m:[]};let nU=0;const seenT=new Set();
@@ -2037,10 +2103,11 @@ function pccmFileBox(clsOnly){const ky=(S.term||0)===1?2:1,chk=(id,txt,on,tip)=>
   return `<div class="pcc">
 <div class="pcard"><div class="pch"><span class="pcn">1</span>File PCCM theo mẫu của phần mềm <small>.xlsx</small></div>
 <p class="hint">Bấm "Tải file mẫu" để lấy file có sẵn danh sách lớp, môn, GV đang cài đặt (chọn từ danh sách, không gõ nhầm). Điền xong, lưu lại rồi bấm "Nhập file mẫu". Tên lớp, môn, GV chỉ cần giống tên trong phần mềm; tên chưa có sẽ được tạo mới và báo lại.</p>
-<div class="row" style="margin:0 0 8px"><button class="ghost" data-act="pccmTpl" title="Tạo file Excel có sẵn danh sách lớp, môn, GV, điểm trường đang cài đặt"><svg class="ic"><use href="#i-save"/></svg> Tải file mẫu</button><button data-act="pccmFile" data-k="mau"><svg class="ic"><use href="#i-open"/></svg> Nhập file mẫu</button></div>
+<div class="row" style="margin:0 0 8px"><button class="ghost" data-act="pccmTpl" title="File mẫu trống, có sẵn danh sách lớp, môn, GV, điểm trường đang cài đặt"><svg class="ic"><use href="#i-save"/></svg> Tải file mẫu</button><button class="ghost" data-act="pccmTpl" data-k="fill" title="File mẫu có điền sẵn phân công đang dùng trong phần mềm: để lưu, in, hoặc sửa rồi nhập lại" ${S.assigns.length?'':'disabled'}><svg class="ic"><use href="#i-save"/></svg> Xuất PCCM đang dùng</button><button data-act="pccmFile" data-k="mau"><svg class="ic"><use href="#i-open"/></svg> Nhập file mẫu</button></div>
 <div class="pco">${chk('xCls','Danh sách, cấu hình lớp',true)}${chk('xSubj','Số tiết môn học',!S.subjects.length)}${chk('xPccm','GV và phân công',!clsOnly)}</div></div>
-${clsOnly?'':`<div class="pcard"><div class="pch"><span class="pcn">2</span>File PCCM xuất từ VnEdu <small>.xls</small></div>
-<p class="hint">Chọn thẳng file tải về từ VnEdu (các cột Mã số GV, Họ tên / Tài khoản, Môn, Các lớp dạy kỳ 1, kỳ 2). Môn ghép (Khoa học tự nhiên, Lịch sử và Địa lí, Nghệ thuật) được tách theo môn GV đã khai ở trang Giáo viên; "Toán học", "Ngoại ngữ", "Tiếng dân tộc" tự đổi sang tên môn đang dùng; tên GV khác dấu được ghép với GV đang có.</p>
+${clsOnly?'':`<div class="pcard"><div class="pch"><span class="pcn">2</span>File PCCM dạng VnEdu <small>.xls, .xlsx</small></div>
+<p class="hint">Chọn thẳng file tải về từ VnEdu (các cột Mã số GV, Họ tên / Tài khoản, Môn, Các lớp dạy kỳ 1, kỳ 2). Môn ghép (Khoa học tự nhiên, Lịch sử và Địa lí, Nghệ thuật) được tách theo môn GV đã khai ở trang Giáo viên; "Toán học", "Ngoại ngữ", "Tiếng dân tộc" tự đổi sang tên môn đang dùng; tên GV khác dấu được ghép với GV đang có. "Tải mẫu VnEdu" có sẵn sheet <b>Môn học</b> ghi tên môn trong phần mềm và tên tương ứng trên VnEdu, cột Môn chọn từ danh sách để thống nhất tên; sheet <b>Số tiết</b> (lớp × môn) để ghi số tiết riêng từng lớp, nhập vào sẽ áp dụng luôn.</p>
+<div class="row" style="margin:0 0 8px"><button class="ghost" data-act="vnTpl" title="Mẫu trống dạng VnEdu, kèm sheet Môn học (tên môn trong phần mềm và tên tương ứng trên VnEdu), Giáo viên, Lớp để chọn"><svg class="ic"><use href="#i-save"/></svg> Tải mẫu VnEdu</button><button class="ghost" data-act="vnTpl" data-k="fill" title="Phân công đang dùng, ghi theo dạng VnEdu" ${S.assigns.length?'':'disabled'}><svg class="ic"><use href="#i-save"/></svg> Xuất PCCM đang dùng</button></div>
 <div class="row" style="margin:0 0 8px;align-items:flex-end"><label>Lấy lớp dạy<select id="xKy"><option value="1" ${ky===1?'selected':''}>Học kỳ 1</option><option value="2" ${ky===2?'selected':''}>Học kỳ 2</option></select></label><button data-act="pccmFile" data-k="vnedu"><svg class="ic"><use href="#i-open"/></svg> Nhập file VnEdu</button></div></div>`}
 </div>
 <div class="row" style="margin:4px 0 10px;align-items:center">${chk('xRep','Thay toàn bộ phân công đang có',true,'Bỏ chọn thì chỉ thêm, sửa các dòng có trong file')}<span class="hint" style="margin:0">Trước khi nhập, phần mềm tự "Lưu" một bản để quay lại nếu cần.</span></div>`;}
@@ -3134,7 +3201,8 @@ document.addEventListener('click',e=>{
       if(+document.getElementById('mvP').value>=S.per[+document.getElementById('mvS').value])return toast('Buổi này không có tiết đó');
       S.clsMove=S.clsMove||{};const l=S.clsMove[c.name]=S.clsMove[c.name]||[];if(l.some(x=>x.to===to))return toast('Ô này đã có tiết khóa riêng');l.push({from,to});changed();render();toast('Đã dời cho lớp '+c.name+' sang '+keyName(to)+'. Bấm "Xếp tiếp" hoặc "Xếp mới" để áp dụng.');return;}
     case 'mvDel':{const l=(S.clsMove||{})[k];if(!l)return;l.splice(i,1);if(!l.length)delete S.clsMove[k];changed();render();return;}
-    case 'pccmTpl':downloadPccmTemplate();return;
+    case 'pccmTpl':downloadPccmTemplate(k==='fill');return;
+    case 'vnTpl':downloadVnedu(k==='fill');return;
     case 'pccmA':{const txt=document.getElementById('pastePccm').value;if(!txt.trim())return toast('Dán PCCM vào ô trước');
       if(k==='replace'&&S.assigns.length&&!confirm('Thay toàn bộ '+S.assigns.length+' dòng phân công hiện có bằng PCCM vừa dán?'))return;
       importPccm(txt,k==='replace');changed();render();toast(view.pccmMsg.ok);return;}
